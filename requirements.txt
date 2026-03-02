@@ -1,0 +1,8 @@
+streamlit
+pandas
+anthropic
+fpdf
+openpyxl
+supabase
+SQLAlchemy
+psycopg2-binary
