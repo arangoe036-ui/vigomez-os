@@ -12,7 +12,7 @@ df_kardex = load_kardex()
 if not df_kardex.empty:
     # --- 1. SMART COLUMN DETECTOR ---
     col_fruta = next((col for col in df_kardex.columns if col.upper() in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'ARTICULO']), df_kardex.columns[0])
-    col_bodega = next((col for col in df_kardex.columns if col.upper() in ['BODEGA', 'SEDE', 'UBICACION', 'LOCATION', 'SUCURSAL']), None)
+    col_bodega = "PON_TU_COLUMNA_AQUI"
     col_cajas = next((col for col in df_kardex.columns if 'CAJA' in col.upper() or 'STOCK' in col.upper() or 'CANTIDAD' in col.upper() or 'SALDO' in col.upper()), None)
 
     # --- 2. THE CEO FILTERS ---
