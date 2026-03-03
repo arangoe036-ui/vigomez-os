@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 from db import load_arribos
 
 st.set_page_config(page_title="Dashboard de Arribos", layout="wide")
