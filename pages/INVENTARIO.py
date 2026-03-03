@@ -1,95 +1,85 @@
 import streamlit as st
 import pandas as pd
 from db import load_kardex
-from sidebar import render_sidebar
-render_sidebar()
 
 st.set_page_config(page_title="Inventario Kardex", layout="wide")
-st.title("🏭 Inventario Actual (Kardex)")
 
-master_kardex_df = load_kardex()
+st.title("📦 Inventario Actual (Kardex)")
+st.markdown("Vista detallada del stock físico vs. tránsito en formato tabla cruzada.")
 
-if master_kardex_df.empty:
-    st.info("No se encontró Kardex en la nube. Sube un archivo en la página principal.")
-else:
-    st.caption(f"Última actualización: {master_kardex_df['Last_Updated'].iloc[0] if 'Last_Updated' in master_kardex_df.columns else 'N/A'}")
-    
-    df_kardex = master_kardex_df.copy()
-    
-    # 1. Identify Physical Warehouses vs Transit
-    physical_wh = [col for col in ['BOGOTAT', 'BOGOTAC', 'VIGOMED', 'VIGOBAR', 'VIGOPAL', 'VIGOPER', 'YUMBO'] if col in df_kardex.columns]
-    
-    df_kardex['Total_Bodega'] = df_kardex[physical_wh].sum(axis=1)
-    df_kardex['En_Transito'] = df_kardex['TRANSITO'] if 'TRANSITO' in df_kardex.columns else 0
-    df_kardex['Total_General'] = df_kardex['TOTAL'] if 'TOTAL' in df_kardex.columns else df_kardex['Total_Bodega'] + df_kardex['En_Transito']
+df_kardex = load_kardex()
 
-    # -------------------------------------------------------------------------
-    # NEW VISUALIZATION: SEPARATE CHARTS PER WAREHOUSE WITH UNIQUE COLORS
-    # -------------------------------------------------------------------------
-    st.subheader("🗺️ Composición de Stock por Sede Física")
-    st.markdown("Cajas disponibles de cada fruta, separadas por ubicación.")
+if not df_kardex.empty:
+    # --- 1. SMART COLUMN DETECTOR ---
+    # Detect Fruit column
+    col_fruta = next((col for col in df_kardex.columns if col.upper() in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'ARTICULO']), df_kardex.columns[0])
     
-    # Melt the data to make it easy to group
-    melted_df = df_kardex.melt(
-        id_vars=['Fruit_Category'], 
-        value_vars=physical_wh, 
-        var_name='Bodega', 
-        value_name='Cajas'
-    )
+    # Detect Location/Bodega column
+    col_bodega = next((col for col in df_kardex.columns if col.upper() in ['BODEGA', 'SEDE', 'UBICACION', 'LOCATION', 'SUCURSAL']), None)
     
-    # Group by Bodega and Fruit Category
-    bodega_composition = melted_df.groupby(['Bodega', 'Fruit_Category'])['Cajas'].sum().reset_index()
-    bodega_composition = bodega_composition[bodega_composition['Cajas'] > 0] # Remove empty stock
+    # Detect Quantity column
+    col_cajas = next((col for col in df_kardex.columns if 'CAJA' in col.upper() or 'STOCK' in col.upper() or 'CANTIDAD' in col.upper() or 'SALDO' in col.upper()), None)
 
-    # Create a grid layout (3 charts per row)
-    active_warehouses = bodega_composition['Bodega'].unique()
-    cols = st.columns(3)
-    
-    for i, wh in enumerate(active_warehouses):
-        wh_data = bodega_composition[bodega_composition['Bodega'] == wh]
-        wh_data = wh_data.sort_values('Cajas', ascending=False)
+    if col_bodega and col_cajas:
         
-        with cols[i % 3]:
-            st.markdown(f"### 📍 {wh}")
-            # By passing the DataFrame directly and setting color='Fruit_Category',
-            # Streamlit will automatically assign a distinct color to each fruit!
-            st.bar_chart(
-                wh_data,
-                x='Fruit_Category',
-                y='Cajas',
-                color='Fruit_Category',
-                use_container_width=True
+        # --- 2. SEPARATE TRANSIT VS PHYSICAL ---
+        # We look for the word "TRANSITO" in the Bodega/Location column to split the data
+        mask_transito = df_kardex[col_bodega].astype(str).str.contains('TRANSITO|TRÁNSITO|TRANS', case=False, na=False)
+        
+        df_transito = df_kardex[mask_transito]
+        df_fisico = df_kardex[~mask_transito]
+
+        # --- 3. CALCULATE HIGH-LEVEL METRICS ---
+        total_fisico = df_fisico[col_cajas].sum()
+        total_transito = df_transito[col_cajas].sum()
+
+        col1, col2 = st.columns(2)
+        col1.metric("🏢 Total Stock Físico (Cajas)", f"{total_fisico:,.0f}")
+        col2.metric("🚚 Total en Tránsito (Cajas)", f"{total_transito:,.0f}")
+
+        st.divider()
+
+        # --- 4. TABLE 1: PHYSICAL STOCK MATRIX ---
+        st.subheader("🏢 Composición de Stock Físico por Sede")
+        if not df_fisico.empty:
+            # Create an Excel-style pivot table
+            pivot_fisico = pd.pivot_table(
+                df_fisico, 
+                values=col_cajas, 
+                index=col_fruta, 
+                columns=col_bodega, 
+                aggfunc='sum', 
+                fill_value=0
             )
+            # Add a master Total column on the far right
+            pivot_fisico['TOTAL FÍSICO'] = pivot_fisico.sum(axis=1)
             
-    st.divider()
+            # Display it cleanly in Streamlit, formatting numbers with commas
+            st.dataframe(pivot_fisico.style.format("{:,.0f}"), use_container_width=True)
+        else:
+            st.info("No hay stock físico registrado.")
 
-    # -------------------------------------------------------------------------
-    # WAREHOUSE DRILL-DOWN & RAW DATA
-    # -------------------------------------------------------------------------
-    col1, col2 = st.columns([1, 3])
-    
-    with col1:
-        st.markdown("### 🔍 Filtro Rápido")
-        selected_wh = st.selectbox("Ver detalle de una bodega específica:", ["Todas"] + physical_wh)
+        st.divider()
+
+        # --- 5. TABLE 2: TRANSIT STOCK MATRIX ---
+        st.subheader("🚚 Stock en Tránsito")
+        if not df_transito.empty:
+            pivot_transito = pd.pivot_table(
+                df_transito, 
+                values=col_cajas, 
+                index=col_fruta, 
+                columns=col_bodega, 
+                aggfunc='sum', 
+                fill_value=0
+            )
+            pivot_transito['TOTAL TRÁNSITO'] = pivot_transito.sum(axis=1)
+            st.dataframe(pivot_transito.style.format("{:,.0f}"), use_container_width=True)
+        else:
+            st.info("No hay stock en tránsito en este momento.")
+
+    else:
+        st.warning("No se pudieron detectar las columnas de Bodega o Cajas. Mostrando tabla general cruda:")
+        st.dataframe(df_kardex, use_container_width=True)
         
-    with col2:
-        st.markdown("### 📦 Detalle por SKU")
-        display_cols = ['Fruit_Category', 'FRUTA'] + physical_wh + ['Total_Bodega', 'En_Transito', 'Total_General']
-        grouped_view = df_kardex[display_cols].sort_values(['Fruit_Category', 'FRUTA'])
-        
-        # Filter logic if a specific warehouse is selected
-        if selected_wh != "Todas":
-            grouped_view = grouped_view[grouped_view[selected_wh] > 0]
-            
-        st.dataframe(
-            grouped_view,
-            column_config={
-                "Fruit_Category": "Categoría",
-                "FRUTA": "Código SKU",
-                "Total_Bodega": st.column_config.NumberColumn("∑ Total Físico"),
-                "En_Transito": st.column_config.NumberColumn("🚚 En Tránsito"),
-                "Total_General": "Stock Total"
-            },
-            hide_index=True,
-            use_container_width=True
-        )
+else:
+    st.warning("No hay datos de Inventario disponibles. Por favor, sube el archivo Kardex en la barra lateral.")
