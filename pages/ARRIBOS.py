@@ -11,17 +11,12 @@ df_arribos = load_arribos()
 
 if not df_arribos.empty:
     # --- 1. SMART COLUMN DETECTOR ---
-    # This prevents KeyErrors by finding the real column names automatically
-    columnas = [col.upper() for col in df_arribos.columns]
-    
-    # Detect the exact name of the Fruit column
     col_fruta_real = next((col for col in df_arribos.columns if col.upper() in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'VARIEDAD']), df_arribos.columns[0])
-    
-    # Detect the Week column (if it exists)
     col_semana_real = next((col for col in df_arribos.columns if 'SEMANA' in col.upper() or 'WEEK' in col.upper()), None)
-    
-    # Detect Quantity/Boxes column
     col_cajas_real = next((col for col in df_arribos.columns if 'CAJA' in col.upper() or 'QUANTITY' in col.upper() or 'QTY' in col.upper()), None)
+    
+    # NEW: Detect Date column for the "Arrivals per Day" chart
+    col_fecha_real = next((col for col in df_arribos.columns if 'ETA' in col.upper() or 'FECHA' in col.upper() or 'DATE' in col.upper() or 'LLEGADA' in col.upper()), None)
 
     st.markdown("### ⚙️ Filtros de Inbound")
     
@@ -39,7 +34,6 @@ if not df_arribos.empty:
             
     with col2:
         st.markdown("**2. Filtrar por Empresa**")
-        # CEO Request: Checkbox instead of forcing tags
         todas_empresas = st.checkbox("✅ Todas las Empresas", value=True)
         
         if todas_empresas:
@@ -53,7 +47,6 @@ if not df_arribos.empty:
 
     with col3:
         st.markdown("**3. Filtrar por Fruta**")
-        # CEO Request: Filter by variety
         todas_frutas = st.checkbox("✅ Todas las Frutas", value=True)
         
         if todas_frutas:
@@ -91,7 +84,22 @@ if not df_arribos.empty:
 
     st.divider()
 
-    # --- 5. CLEAN DATA TABLE ---
+    # --- 5. ARRIVALS PER DAY (THE MISSING CHART) ---
+    st.markdown("### 📅 Arribos por Día (ETA)")
+    if col_fecha_real and col_cajas_real and not filtered_df.empty:
+        # Group by date and sum the boxes
+        df_fechas = filtered_df.groupby(col_fecha_real)[col_cajas_real].sum().reset_index()
+        # Sort chronologically
+        df_fechas = df_fechas.sort_values(by=col_fecha_real)
+        
+        # Build the native Streamlit bar chart
+        st.bar_chart(data=df_fechas, x=col_fecha_real, y=col_cajas_real, color="#ff4b4b")
+    else:
+        st.info("No se detectó la columna de Fechas (ETA) para graficar los arribos diarios.")
+
+    st.divider()
+
+    # --- 6. CLEAN DATA TABLE ---
     st.markdown("### 📋 Datos Detallados")
     st.dataframe(filtered_df, use_container_width=True)
 
