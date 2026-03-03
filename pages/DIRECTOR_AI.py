@@ -83,7 +83,7 @@ if prompt := st.chat_input("Ej: ¿Cuántas cajas de pera arribaron de la compete
             claude_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
             
             response = client.messages.create(
-                model="claude-3-haiku-20240307", # Puedes cambiar a opus o sonnet si prefieres
+                model="opus-4.6", 
                 max_tokens=1000,
                 system=system_prompt,
                 messages=claude_messages
