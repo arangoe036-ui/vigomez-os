@@ -1,180 +1,99 @@
 import streamlit as st
+import pandas as pd
 import anthropic
-import re
-from sidebar import render_sidebar
-from db import load_arribos, load_kardex, load_sku_mapping, load_ventas, load_ai_logs, save_ai_log
+from db import load_arribos, load_kardex, load_ventas
 
-st.set_page_config(page_title="AI Strategy Director", layout="wide")
+st.set_page_config(page_title="Director AI", layout="wide")
 
-# Call the universal sidebar
-render_sidebar()
+st.title("🧠 Director AI - Asistente Estratégico")
+st.markdown("Consulta en lenguaje natural sobre el estado de la operación (Arribos, Inventario, Ventas).")
 
-st.title("🤖 DIRECTOR DE ESTRATEGIA AI (VIGOMEZ)")
-st.markdown("Consultor experto enfocado en **Maximización de Ingresos**, Precios Dinámicos y Arbitraje Logístico.")
+# --- 1. CARGAR DATOS ---
+df_arribos = load_arribos()
+df_kardex = load_kardex()
+df_ventas = load_ventas()
 
-try:
-    api_key = st.secrets["ANTHROPIC_API_KEY"]
-except Exception:
-    st.error("Missing Anthropic API Key in secrets.toml")
-    st.stop()
+# --- 2. PREPARAR EL CONTEXTO (EL CEREBRO DE LA IA) ---
+# Aquí es donde arreglamos el problema de la "Semana 08"
+contexto_arribos = "Sin datos de arribos."
+if not df_arribos.empty:
+    cols_upper = {c.upper().strip(): c for c in df_arribos.columns}
+    col_semana = next((cols_upper[c] for c in cols_upper if 'SEMANA' in c or 'WEEK' in c), None)
+    col_fruta = next((cols_upper[c] for c in cols_upper if c in ['FRUTA', 'PRODUCTO', 'VARIEDAD']), df_arribos.columns[0])
+    col_importador = next((cols_upper[c] for c in cols_upper if 'IMPORTADOR' in c or 'EMPRESA' in c), None)
+    col_cajas = next((cols_upper[c] for c in cols_upper if 'CAJA' in c or 'QTY' in c), None)
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+    # Agrupamos por semana para que la IA sepa exactamente cuándo llega cada cosa
+    if col_semana and col_importador and col_fruta and col_cajas:
+        df_arribos[col_cajas] = pd.to_numeric(df_arribos[col_cajas], errors='coerce').fillna(0)
+        resumen = df_arribos.groupby([col_semana, col_importador, col_fruta])[col_cajas].sum().reset_index()
+        contexto_arribos = resumen.to_csv(index=False)
+    else:
+        # Si no encuentra las columnas exactas, le pasamos todo para no fallar
+        contexto_arribos = df_arribos.to_csv(index=False)
 
-# -----------------------------------------------------------------------------
-# 1. FETCH LIVE DATA
-# -----------------------------------------------------------------------------
-master_kardex_df = load_kardex()
-master_arribos_df = load_arribos()
-sku_mapping_df = load_sku_mapping() 
-master_ventas_df = load_ventas()
+contexto_kardex = df_kardex.to_csv(index=False) if not df_kardex.empty else "Sin datos de kardex."
+contexto_ventas = df_ventas.to_csv(index=False) if not df_ventas.empty else "Sin datos de ventas."
 
-sku_guide_text = ""
-if not sku_mapping_df.empty:
-    for _, row in sku_mapping_df.iterrows():
-        sku_guide_text += f"- {row['Codigo']}: {row['Categoria']} | {row['Descripcion']}\n"
+# --- 3. CONFIGURAR EL PROMPT DEL SISTEMA ---
+system_prompt = f"""
+Eres el Chief Commercial Officer (Director AI) de VIGOMEZ, una empresa de importación de fruta en Colombia.
+Tu trabajo es analizar los datos operativos y dar respuestas estratégicas, directas y precisas al CEO.
 
-current_stock_detailed = {}
-if not master_kardex_df.empty:
-    df_k = master_kardex_df.copy()
-    locations = [col for col in ['BOGOTAT', 'BOGOTAC', 'VIGOMED', 'VIGOBAR', 'VIGOPAL', 'VIGOPER', 'YUMBO', 'TRANSITO'] if col in df_k.columns]
-    for loc in locations:
-        loc_data = df_k[df_k[loc] > 0]
-        if not loc_data.empty:
-            current_stock_detailed[loc] = loc_data.set_index('FRUTA')[loc].to_dict()
+REGLAS ESTRICTAS:
+1. Responde SIEMPRE basándote en los datos CSV proporcionados abajo.
+2. Si te preguntan por una semana específica (ej. Semana 08), busca EXACTAMENTE en la columna correspondiente del contexto de Arribos.
+3. Si el CEO pregunta por la competencia, compara los datos de 'VIGOMEZ' vs los demás importadores.
+4. Sé conciso. Ve directo a los números.
 
-sales_financials = {}
-if not master_ventas_df.empty:
-    grouped = master_ventas_df.groupby(['Bodega', 'FRUTA']).agg(
-        Cajas_Vendidas=('Total_Cajas_Vendidas', 'sum'),
-        Precio_Promedio=('Precio_Promedio', 'mean')
-    ).reset_index()
-    
-    for _, row in grouped.iterrows():
-        bodega = row['Bodega']
-        if bodega not in sales_financials:
-            sales_financials[bodega] = {}
-        sales_financials[bodega][row['FRUTA']] = {
-            "Cajas_Vendidas": row['Cajas_Vendidas'], 
-            "Precio_Promedio_COP": row['Precio_Promedio']
-        }
+--- DATOS DE ARRIBOS (INBOUND POR SEMANA) ---
+{contexto_arribos}
 
-vigomez_inbound = {}
-competitor_inbound = {}
-if not master_arribos_df.empty:
-    vigomez_mask = master_arribos_df['Importador'].str.contains('VIGOMEZ', case=False, na=False)
-    vigomez_inbound = master_arribos_df[vigomez_mask].groupby('Fruit_Type')['Quantity'].sum().to_dict()
-    competitor_inbound = master_arribos_df[~vigomez_mask].groupby('Fruit_Type')['Quantity'].sum().to_dict()
+--- DATOS DE INVENTARIO (KARDEX FÍSICO VS TRÁNSITO) ---
+{contexto_kardex}
 
-# -----------------------------------------------------------------------------
-# 2. FETCH LONG-TERM MEMORY
-# -----------------------------------------------------------------------------
-past_logs = load_ai_logs(limit=3)
-memory_text = ""
-if past_logs:
-    for log in past_logs:
-        memory_text += f"\n- [{log['timestamp']}] USER: {log['user_query']} | AI: {log['ai_response']}"
-else:
-    memory_text = "(No past history available)"
-
-# -----------------------------------------------------------------------------
-# 3. CONCISE SYSTEM PROMPT
-# -----------------------------------------------------------------------------
-system_prompt = f"""You are an elite, profit-driven Supply Chain Director for VIGOMEZ. 
-Your output must be EXTREMELY CONCISE, CLEAR, and ACTIONABLE. No fluff. No long paragraphs.
-
-LOCATION TRANSLATION: BOGOTAC/BOGOTAT=BOGOTÁ, VIGOMED=MEDELLÍN, VIGOPAL=CALI.
-SKU GUIDE: {sku_guide_text}
-
-DATA CONTEXT:
-1. Physical Stock: {current_stock_detailed}
-2. Sales Velocity & Pricing: {sales_financials}
-3. Inbound VIGOMEZ: {vigomez_inbound}
-4. Inbound COMPETITOR: {competitor_inbound}
-
-PAST RECOMMENDATION HISTORY:
-{memory_text}
-
-PROFIT RULES:
-1. DYNAMIC PRICING: Low stock + high velocity -> RAISE PRICES.
-2. LIQUIDATION: High stock OR massive competitor inbound -> DROP PRICES.
-3. ARBITRAGE: High price delta between cities -> TRANSFER STOCK.
-
-MANDATORY OUTPUT FORMAT:
-Do all your math inside <thinking> tags. 
-Your visible response MUST use this exact format and be very short:
-
-**🧠 Insight Estratégico**
-[1 sentence defining the main market situation]
-
-**🎯 Plan de Acción**
-* [Action 1: e.g. "Subir precio de MGCX100 en BOGOTÁ un 10%"]
-* [Action 2: e.g. "Trasladar 500 cajas de Kiwi de CALI a MEDELLÍN"]
-
-**📊 Justificación Numérica**
-* [Stat 1: e.g. "Kiwi se vende $30k más caro en Medellín"]
-* [Stat 2: e.g. "Solo quedan 0.5 semanas de stock de MGCX100"]
+--- DATOS DE VENTAS ---
+{contexto_ventas}
 """
 
-# -----------------------------------------------------------------------------
-# 4. SUGGESTED PROMPTS UI (Only shows when chat is empty)
-# -----------------------------------------------------------------------------
-button_prompt = None
-if len(st.session_state.chat_history) == 0:
-    st.markdown("### 💡 Preguntas Sugeridas para el CEO:")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("📊 Rentabilidad y Arbitraje"):
-            button_prompt = "¿Qué oportunidades de arbitraje de precios entre ciudades tenemos hoy?"
-    with col2:
-        if st.button("⚠️ Riesgos de Quiebre"):
-            button_prompt = "¿Qué productos están a punto de agotarse y requieren ajuste de precio?"
-    with col3:
-        if st.button("💰 Análisis de Competencia"):
-            button_prompt = "¿Qué está trayendo la competencia y cómo debemos ajustar nuestros precios hoy?"
-    st.divider()
+# --- 4. INTERFAZ DE CHAT ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# -----------------------------------------------------------------------------
-# 5. CHAT RENDERING ENGINE
-# -----------------------------------------------------------------------------
-for message in st.session_state.chat_history:
+# Mostrar historial
+for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        if message["role"] == "assistant":
-            # Upgraded Regex: Hides math even if the AI gets cut off and forgets the closing tag
-            clean_content = re.sub(r'<thinking>.*?(?:</thinking>|$)', '', message["content"], flags=re.DOTALL).strip()
-            st.markdown(clean_content)
-        else:
-            st.markdown(message["content"])
+        st.markdown(message["content"])
 
-# Capture input from either the chat bar OR the buttons above
-user_query = st.chat_input("Escribe tu pregunta o selecciona una opción arriba...") or button_prompt
-
-if user_query:
+# --- 5. LLAMADA A ANTHROPIC ---
+if prompt := st.chat_input("Ej: ¿Cuántas cajas de pera arribaron de la competencia en la semana 08?"):
+    # Agregar mensaje del usuario al chat
+    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(user_query)
-    st.session_state.chat_history.append({"role": "user", "content": user_query})
+        st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Generating concise executive report..."):
-            try:
-                client = anthropic.Anthropic(api_key=api_key)
-                api_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history]
-                
-                response = client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=2500, # Increased to prevent text cut-offs during heavy math
-                    temperature=0.2, 
-                    system=system_prompt,
-                    messages=api_messages
-                )
-                
-                ai_raw_answer = response.content[0].text
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_raw_answer})
-                save_ai_log(user_query, ai_raw_answer)
-                
-                # Show clean answer
-                clean_content = re.sub(r'<thinking>.*?(?:</thinking>|$)', '', ai_raw_answer, flags=re.DOTALL).strip()
-                st.markdown(clean_content)
-                
-            except Exception as e:
-                st.error(f"AI Connection Error: {e}")
+        message_placeholder = st.empty()
+        
+        try:
+            # Conectar con Anthropic usando los secrets
+            client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+            
+            # Formatear el historial para Claude
+            claude_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+            
+            response = client.messages.create(
+                model="claude-3-haiku-20240307", # Puedes cambiar a opus o sonnet si prefieres
+                max_tokens=1000,
+                system=system_prompt,
+                messages=claude_messages
+            )
+            
+            respuesta_ai = response.content[0].text
+            message_placeholder.markdown(respuesta_ai)
+            
+            # Guardar respuesta en historial
+            st.session_state.messages.append({"role": "assistant", "content": respuesta_ai})
+            
+        except Exception as e:
+            st.error(f"Error al conectar con la IA: {e}")
