@@ -8,13 +8,31 @@ st.title("📦 Inventario Actual (Kardex)")
 st.markdown("Vista detallada del stock físico vs. tránsito.")
 
 df_kardex = load_kardex()
-st.error(f"TUS COLUMNAS SON: {df_kardex.columns.tolist()}")
 
 if not df_kardex.empty:
-    # --- 1. SMART COLUMN DETECTOR ---
-    col_fruta = next((col for col in df_kardex.columns if col.upper() in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'ARTICULO']), df_kardex.columns[0])
-    col_bodega = "PON_TU_COLUMNA_AQUI"
-    col_cajas = next((col for col in df_kardex.columns if 'CAJA' in col.upper() or 'STOCK' in col.upper() or 'CANTIDAD' in col.upper() or 'SALDO' in col.upper()), None)
+    # --- 1. BULLETPROOF COLUMN DETECTOR ---
+    # Create a mapping of uppercase column names to the actual literal names
+    cols_upper = {col.upper().strip(): col for col in df_kardex.columns}
+    
+    # Detect Fruit
+    col_fruta = next((cols_upper[c] for c in cols_upper if c in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'ARTICULO', 'VARIEDAD', 'DESCRIPCION']), df_kardex.columns[0])
+    
+    # Detect Bodega/Location
+    col_bodega_candidates = ['BODEGA', 'SEDE', 'UBICACION', 'UBICACIÓN', 'LOCATION', 'SUCURSAL', 'ALMACEN', 'CENTRO', 'LUGAR', 'CIUDAD']
+    col_bodega = next((cols_upper[c] for c in cols_upper if any(cand in c for cand in col_bodega_candidates)), None)
+    
+    # Detect Quantity/Boxes
+    col_cajas_candidates = ['CAJA', 'STOCK', 'CANTIDAD', 'SALDO', 'QTY', 'QUANTITY', 'INVENTARIO']
+    col_cajas = next((cols_upper[c] for c in cols_upper if any(cand in c for cand in col_cajas_candidates)), None)
+
+    # --- FAIL-SAFE UI ---
+    # If the detector fails, let the user pick the column from a dropdown instead of crashing!
+    if not col_bodega:
+        st.warning("⚠️ No pude detectar automáticamente la columna de 'Bodega' o 'Sede'.")
+        col_bodega = st.selectbox("Por favor, selecciona la columna que contiene las ubicaciones (ej. BOGOTAC):", df_kardex.columns.tolist())
+
+    if not col_cajas:
+        col_cajas = st.selectbox("Por favor, selecciona la columna que contiene las cantidades/cajas:", df_kardex.columns.tolist())
 
     # --- 2. THE CEO FILTERS ---
     st.markdown("### ⚙️ Filtros de Inventario")
@@ -28,100 +46,88 @@ if not df_kardex.empty:
         else:
             frutas_seleccionadas = st.multiselect(
                 "Selecciona frutas:", 
-                options=sorted(df_kardex[col_fruta].dropna().unique()),
+                options=sorted(df_kardex[col_fruta].dropna().astype(str).unique()),
                 default=[]
             )
             
     with col2:
-        if col_bodega:
-            st.markdown("**2. Filtrar por Bodega/Sede**")
-            todas_bodegas = st.checkbox("✅ Todas las Bodegas", value=True)
-            if todas_bodegas:
-                bodegas_seleccionadas = df_kardex[col_bodega].dropna().unique()
-            else:
-                bodegas_seleccionadas = st.multiselect(
-                    "Selecciona bodegas:", 
-                    options=sorted(df_kardex[col_bodega].dropna().unique()),
-                    default=[]
-                )
+        st.markdown(f"**2. Filtrar por {col_bodega}**")
+        todas_bodegas = st.checkbox("✅ Todas las Bodegas", value=True)
+        if todas_bodegas:
+            bodegas_seleccionadas = df_kardex[col_bodega].dropna().unique()
         else:
-            bodegas_seleccionadas = []
+            bodegas_seleccionadas = st.multiselect(
+                "Selecciona bodegas:", 
+                options=sorted(df_kardex[col_bodega].dropna().astype(str).unique()),
+                default=[]
+            )
 
     # --- 3. APPLY FILTERS ---
-    mask = df_kardex[col_fruta].isin(frutas_seleccionadas)
-    if col_bodega:
-        mask = mask & df_kardex[col_bodega].isin(bodegas_seleccionadas)
-        
+    mask = df_kardex[col_fruta].isin(frutas_seleccionadas) & df_kardex[col_bodega].isin(bodegas_seleccionadas)
     df_filtered = df_kardex[mask]
 
     st.divider()
 
-    if col_bodega and col_cajas:
-        # --- 4. SEPARATE TRANSIT VS PHYSICAL ---
-        mask_transito = df_filtered[col_bodega].astype(str).str.contains('TRANSITO|TRÁNSITO|TRANS', case=False, na=False)
+    # --- 4. SEPARATE TRANSIT VS PHYSICAL ---
+    # We look for the word "TRANSITO" in your selected location column
+    mask_transito = df_filtered[col_bodega].astype(str).str.contains('TRANSITO|TRÁNSITO|TRANS', case=False, na=False)
+    
+    df_transito = df_filtered[mask_transito]
+    df_fisico = df_filtered[~mask_transito]
+
+    # --- 5. HIGH-LEVEL METRICS ---
+    # Ensure pandas treats the boxes as numbers to avoid math errors
+    total_fisico = pd.to_numeric(df_fisico[col_cajas], errors='coerce').sum()
+    total_transito = pd.to_numeric(df_transito[col_cajas], errors='coerce').sum()
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("🏢 Total Stock Físico (Cajas)", f"{total_fisico:,.0f}")
+    m2.metric("🚚 Total en Tránsito (Cajas)", f"{total_transito:,.0f}")
+    m3.metric("📦 Inventario Total (Físico + Tránsito)", f"{(total_fisico + total_transito):,.0f}")
+
+    st.divider()
+
+    # --- 6. TABLE 1: PHYSICAL STOCK MATRIX (WITH HEATMAP) ---
+    st.subheader("🏢 Composición de Stock Físico por Sede")
+    if not df_fisico.empty:
+        pivot_fisico = pd.pivot_table(
+            df_fisico, 
+            values=col_cajas, 
+            index=col_fruta, 
+            columns=col_bodega, 
+            aggfunc='sum', 
+            fill_value=0
+        )
+        pivot_fisico['TOTAL FÍSICO'] = pivot_fisico.sum(axis=1)
         
-        df_transito = df_filtered[mask_transito]
-        df_fisico = df_filtered[~mask_transito]
-
-        # --- 5. HIGH-LEVEL METRICS ---
-        total_fisico = df_fisico[col_cajas].sum()
-        total_transito = df_transito[col_cajas].sum()
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("🏢 Total Stock Físico (Cajas)", f"{total_fisico:,.0f}")
-        m2.metric("🚚 Total en Tránsito (Cajas)", f"{total_transito:,.0f}")
-        m3.metric("📦 Inventario Total (Físico + Tránsito)", f"{(total_fisico + total_transito):,.0f}")
-
-        st.divider()
-
-        # --- 6. TABLE 1: PHYSICAL STOCK MATRIX (WITH HEATMAP) ---
-        st.subheader("🏢 Composición de Stock Físico por Sede")
-        if not df_fisico.empty:
-            pivot_fisico = pd.pivot_table(
-                df_fisico, 
-                values=col_cajas, 
-                index=col_fruta, 
-                columns=col_bodega, 
-                aggfunc='sum', 
-                fill_value=0
-            )
-            # Add a master Total column
-            pivot_fisico['TOTAL FÍSICO'] = pivot_fisico.sum(axis=1)
-            
-            # Display it with a blue color gradient to highlight large quantities
-            st.dataframe(
-                pivot_fisico.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=None), 
-                use_container_width=True
-            )
-        else:
-            st.info("No hay stock físico registrado para estos filtros.")
-
-        st.divider()
-
-        # --- 7. TABLE 2: TRANSIT STOCK MATRIX (WITH HEATMAP) ---
-        st.subheader("🚚 Stock en Tránsito")
-        if not df_transito.empty:
-            pivot_transito = pd.pivot_table(
-                df_transito, 
-                values=col_cajas, 
-                index=col_fruta, 
-                columns=col_bodega, 
-                aggfunc='sum', 
-                fill_value=0
-            )
-            pivot_transito['TOTAL TRÁNSITO'] = pivot_transito.sum(axis=1)
-            
-            # Display it with an orange color gradient to visually separate it from physical stock
-            st.dataframe(
-                pivot_transito.style.format("{:,.0f}").background_gradient(cmap="Oranges", axis=None), 
-                use_container_width=True
-            )
-        else:
-            st.info("No hay stock en tránsito en este momento.")
-
+        st.dataframe(
+            pivot_fisico.style.format("{:,.0f}").background_gradient(cmap="Blues", axis=None), 
+            use_container_width=True
+        )
     else:
-        st.warning("No se pudieron detectar las columnas de Bodega o Cajas.")
-        st.dataframe(df_filtered, use_container_width=True)
+        st.info("No hay stock físico registrado para estos filtros.")
+
+    st.divider()
+
+    # --- 7. TABLE 2: TRANSIT STOCK MATRIX (WITH HEATMAP) ---
+    st.subheader("🚚 Stock en Tránsito")
+    if not df_transito.empty:
+        pivot_transito = pd.pivot_table(
+            df_transito, 
+            values=col_cajas, 
+            index=col_fruta, 
+            columns=col_bodega, 
+            aggfunc='sum', 
+            fill_value=0
+        )
+        pivot_transito['TOTAL TRÁNSITO'] = pivot_transito.sum(axis=1)
         
+        st.dataframe(
+            pivot_transito.style.format("{:,.0f}").background_gradient(cmap="Oranges", axis=None), 
+            use_container_width=True
+        )
+    else:
+        st.info("No hay stock en tránsito para estos filtros.")
+
 else:
     st.warning("No hay datos de Inventario disponibles. Por favor, sube el archivo Kardex en la barra lateral.")
