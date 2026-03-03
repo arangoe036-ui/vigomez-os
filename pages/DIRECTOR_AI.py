@@ -79,7 +79,7 @@ if prompt := st.chat_input("Ej: ¿Cuántas cajas de pera arribaron en la semana 
             claude_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
             
             response = client.messages.create(
-                model="claude-3-opus-20240229", # EXACT MODEL STRING DEMANDED BY ANTHROPIC API
+                model="claude-opus-4-6", 
                 max_tokens=1000,
                 system=system_prompt,
                 messages=claude_messages
