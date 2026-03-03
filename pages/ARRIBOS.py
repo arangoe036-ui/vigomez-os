@@ -14,8 +14,6 @@ if not df_arribos.empty:
     col_fruta_real = next((col for col in df_arribos.columns if col.upper() in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'VARIEDAD']), df_arribos.columns[0])
     col_semana_real = next((col for col in df_arribos.columns if 'SEMANA' in col.upper() or 'WEEK' in col.upper()), None)
     col_cajas_real = next((col for col in df_arribos.columns if 'CAJA' in col.upper() or 'QUANTITY' in col.upper() or 'QTY' in col.upper()), None)
-    
-    # NEW: Detect Date column for the "Arrivals per Day" chart
     col_fecha_real = next((col for col in df_arribos.columns if 'ETA' in col.upper() or 'FECHA' in col.upper() or 'DATE' in col.upper() or 'LLEGADA' in col.upper()), None)
 
     st.markdown("### ⚙️ Filtros de Inbound")
@@ -84,23 +82,30 @@ if not df_arribos.empty:
 
     st.divider()
 
-    # --- 5. ARRIVALS PER DAY (THE MISSING CHART) ---
+    # --- 5. ARRIVALS PER DAY (THE DROP-DOWN TABLES) ---
     st.markdown("### 📅 Arribos por Día (ETA)")
-    if col_fecha_real and col_cajas_real and not filtered_df.empty:
-        # Group by date and sum the boxes
-        df_fechas = filtered_df.groupby(col_fecha_real)[col_cajas_real].sum().reset_index()
-        # Sort chronologically
-        df_fechas = df_fechas.sort_values(by=col_fecha_real)
+    if col_fecha_real and not filtered_df.empty:
+        # Get a list of all unique dates in the filtered data, sorted chronologically
+        fechas_unicas = sorted(filtered_df[col_fecha_real].dropna().unique())
         
-        # Build the native Streamlit bar chart
-        st.bar_chart(data=df_fechas, x=col_fecha_real, y=col_cajas_real, color="#ff4b4b")
+        for fecha in fechas_unicas:
+            # Get only the rows for this specific date
+            df_dia = filtered_df[filtered_df[col_fecha_real] == fecha]
+            
+            # Calculate total boxes for the header
+            cajas_dia = int(df_dia[col_cajas_real].sum()) if col_cajas_real else len(df_dia)
+            
+            # Create the dropdown container
+            with st.expander(f"📅 {fecha}  |  📦 {cajas_dia:,.0f} Cajas Totales"):
+                # Inside the dropdown, show the clean table for that day
+                st.dataframe(df_dia, use_container_width=True)
     else:
-        st.info("No se detectó la columna de Fechas (ETA) para graficar los arribos diarios.")
+        st.info("No se detectó la columna de Fechas (ETA) para agrupar los arribos.")
 
     st.divider()
 
-    # --- 6. CLEAN DATA TABLE ---
-    st.markdown("### 📋 Datos Detallados")
+    # --- 6. CLEAN DATA TABLE (ALL DATA) ---
+    st.markdown("### 📋 Base de Datos Completa (Filtrada)")
     st.dataframe(filtered_df, use_container_width=True)
 
 else:
