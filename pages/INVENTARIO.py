@@ -11,28 +11,30 @@ df_kardex = load_kardex()
 
 if not df_kardex.empty:
     # --- 1. BULLETPROOF COLUMN DETECTOR ---
-    # Create a mapping of uppercase column names to the actual literal names
     cols_upper = {col.upper().strip(): col for col in df_kardex.columns}
     
-    # Detect Fruit
     col_fruta = next((cols_upper[c] for c in cols_upper if c in ['FRUTA', 'FRUITS', 'FRUIT_CATEGORY', 'PRODUCTO', 'ARTICULO', 'VARIEDAD', 'DESCRIPCION']), df_kardex.columns[0])
     
-    # Detect Bodega/Location
     col_bodega_candidates = ['BODEGA', 'SEDE', 'UBICACION', 'UBICACIÓN', 'LOCATION', 'SUCURSAL', 'ALMACEN', 'CENTRO', 'LUGAR', 'CIUDAD']
     col_bodega = next((cols_upper[c] for c in cols_upper if any(cand in c for cand in col_bodega_candidates)), None)
     
-    # Detect Quantity/Boxes
     col_cajas_candidates = ['CAJA', 'STOCK', 'CANTIDAD', 'SALDO', 'QTY', 'QUANTITY', 'INVENTARIO']
     col_cajas = next((cols_upper[c] for c in cols_upper if any(cand in c for cand in col_cajas_candidates)), None)
 
     # --- FAIL-SAFE UI ---
-    # If the detector fails, let the user pick the column from a dropdown instead of crashing!
     if not col_bodega:
         st.warning("⚠️ No pude detectar automáticamente la columna de 'Bodega' o 'Sede'.")
         col_bodega = st.selectbox("Por favor, selecciona la columna que contiene las ubicaciones (ej. BOGOTAC):", df_kardex.columns.tolist())
 
     if not col_cajas:
+        st.warning("⚠️ No pude detectar automáticamente la columna de 'Cajas/Cantidades'.")
         col_cajas = st.selectbox("Por favor, selecciona la columna que contiene las cantidades/cajas:", df_kardex.columns.tolist())
+
+    # --- NEW SAFETY LOCK ---
+    # Stops the app from crashing if the user hasn't picked distinct columns yet
+    if col_bodega == col_fruta or col_cajas == col_fruta or col_bodega == col_cajas:
+        st.error("🛑 Esperando configuración: Usa los menús desplegables de arriba para seleccionar las columnas correctas de Ubicación y Cantidad.")
+        st.stop()
 
     # --- 2. THE CEO FILTERS ---
     st.markdown("### ⚙️ Filtros de Inventario")
@@ -69,14 +71,12 @@ if not df_kardex.empty:
     st.divider()
 
     # --- 4. SEPARATE TRANSIT VS PHYSICAL ---
-    # We look for the word "TRANSITO" in your selected location column
     mask_transito = df_filtered[col_bodega].astype(str).str.contains('TRANSITO|TRÁNSITO|TRANS', case=False, na=False)
     
     df_transito = df_filtered[mask_transito]
     df_fisico = df_filtered[~mask_transito]
 
     # --- 5. HIGH-LEVEL METRICS ---
-    # Ensure pandas treats the boxes as numbers to avoid math errors
     total_fisico = pd.to_numeric(df_fisico[col_cajas], errors='coerce').sum()
     total_transito = pd.to_numeric(df_transito[col_cajas], errors='coerce').sum()
 
