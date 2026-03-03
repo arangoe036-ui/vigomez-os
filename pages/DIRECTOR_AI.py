@@ -14,7 +14,6 @@ df_kardex = load_kardex()
 df_ventas = load_ventas()
 
 # --- 2. PREPARAR EL CONTEXTO (EL CEREBRO DE LA IA) ---
-# Aquí es donde arreglamos el problema de la "Semana 08"
 contexto_arribos = "Sin datos de arribos."
 if not df_arribos.empty:
     cols_upper = {c.upper().strip(): c for c in df_arribos.columns}
@@ -29,7 +28,7 @@ if not df_arribos.empty:
         resumen = df_arribos.groupby([col_semana, col_importador, col_fruta])[col_cajas].sum().reset_index()
         contexto_arribos = resumen.to_csv(index=False)
     else:
-        # Si no encuentra las columnas exactas, le pasamos todo para no fallar
+        # Si no encuentra las columnas exactas, le pasamos todo
         contexto_arribos = df_arribos.to_csv(index=False)
 
 contexto_kardex = df_kardex.to_csv(index=False) if not df_kardex.empty else "Sin datos de kardex."
@@ -66,7 +65,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # --- 5. LLAMADA A ANTHROPIC ---
-if prompt := st.chat_input("Ej: ¿Cuántas cajas de pera arribaron de la competencia en la semana 08?"):
+if prompt := st.chat_input("Ej: ¿Cuántas cajas de pera arribaron en la semana 08 de 2026?"):
     # Agregar mensaje del usuario al chat
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -76,14 +75,11 @@ if prompt := st.chat_input("Ej: ¿Cuántas cajas de pera arribaron de la compete
         message_placeholder = st.empty()
         
         try:
-            # Conectar con Anthropic usando los secrets
             client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-            
-            # Formatear el historial para Claude
             claude_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
             
             response = client.messages.create(
-                model="opus-4.6", 
+                model="claude-3-opus-20240229", # EXACT MODEL STRING DEMANDED BY ANTHROPIC API
                 max_tokens=1000,
                 system=system_prompt,
                 messages=claude_messages
