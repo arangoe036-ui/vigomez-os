@@ -8,6 +8,7 @@ st.title("📦 Inventario Actual (Kardex)")
 st.markdown("Vista detallada del stock físico vs. tránsito.")
 
 df_kardex = load_kardex()
+st.error(f"TUS COLUMNAS SON: {df_kardex.columns.tolist()}")
 
 if not df_kardex.empty:
     # --- 1. SMART COLUMN DETECTOR ---
